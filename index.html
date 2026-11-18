@@ -1794,12 +1794,12 @@ const CORE = (function () {
     // 1) 단어 두 번 듣기
     setStatus('listening', '🔊 단어를 두 번 들려줄게요 (1/2)', true);
     try { window.speechSynthesis.cancel(); } catch (e) {}
-    await speakOnce(w.word, 0.82);
+    await speakOnce(w.word, 0.72);
     if (token !== S.token) return;
-    await sleep(260);
+    await sleep(600);
     if (token !== S.token) return;
     setStatus('listening', '🔊 한 번 더! (2/2)', true);
-    await speakOnce(w.word, 0.82);
+    await speakOnce(w.word, 0.72);
     if (token !== S.token) return;
 
     // 2) 비프음
@@ -1952,7 +1952,7 @@ const CORE = (function () {
     const token = S.token;
     setStatus('listening', '🔊 다시 들려줄게요', true);
     try { window.speechSynthesis.cancel(); } catch (e) {}
-    await speakOnce(q.word.word, 0.8);
+    await speakOnce(q.word.word, 0.72);
     if (token !== S.token) return;
     setCountdown(3);
     const res = await listen(3000);
