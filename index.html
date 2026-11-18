@@ -1336,8 +1336,31 @@ const CORE = (function () {
     return { version: 1, days: {}, wrongPool: [] };
   }
 
+  // localStorage 접근 자체가 막힌 브라우저(시크릿 모드·앱 내 브라우저 등)에서는 메모리 저장소로 대체
+  const MEMORY_STORE = (function () {
+    const m = new Map();
+    return {
+      getItem: (k) => (m.has(k) ? m.get(k) : null),
+      setItem: (k, v) => m.set(k, String(v)),
+      removeItem: (k) => m.delete(k),
+    };
+  })();
+
+  function safeStorage(storage) {
+    if (storage) return storage;
+    try {
+      const ls = window.localStorage;
+      const probe = '__vq_probe__';
+      ls.setItem(probe, '1');
+      ls.removeItem(probe);
+      return ls;
+    } catch (e) {
+      return MEMORY_STORE;
+    }
+  }
+
   function loadState(storage) {
-    const st = storage || window.localStorage;
+    const st = safeStorage(storage);
     try {
       const raw = st.getItem(STORE_KEY);
       if (!raw) return emptyState();
@@ -1353,7 +1376,7 @@ const CORE = (function () {
   }
 
   function saveState(state, storage) {
-    const st = storage || window.localStorage;
+    const st = safeStorage(storage);
     try {
       st.setItem(STORE_KEY, JSON.stringify(state));
       return true;
@@ -1976,7 +1999,7 @@ const CORE = (function () {
 
   el.resetBtn.addEventListener('click', () => {
     if (!confirm('저장된 모든 기록(DAY 정답률, 오답 목록)을 지울까요?')) return;
-    localStorage.removeItem(CORE.STORE_KEY);
+    try { localStorage.removeItem(CORE.STORE_KEY); } catch (e) {}
     S.state = CORE.emptyState();
     renderHome();
   });
@@ -2185,6 +2208,12 @@ function RUN_TESTS() {
     fs.setItem(CORE.STORE_KEY, '{broken');
     const st = CORE.loadState(fs);
     return st.days && st.wrongPool.length === 0;
+  });
+  check('저장: 저장소가 막힌 브라우저에서도 화면이 죽지 않는다', () => {
+    const blocked = { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); }, removeItem: () => { throw new Error('blocked'); } };
+    const st = CORE.loadState(blocked);
+    const saved = CORE.saveState(st, blocked);
+    return st.days !== undefined && saved === false;
   });
   check('홈: 다음에 풀 DAY 계산', () => {
     const st = CORE.emptyState();
