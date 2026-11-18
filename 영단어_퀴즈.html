@@ -116,6 +116,29 @@ button{font-family:inherit;font-size:1rem;cursor:pointer;border:none;background:
 .foot{margin:22px 2px 0;display:flex;justify-content:space-between;align-items:center;font-size:.76rem;color:#B5A896}
 .foot button{font-size:.76rem;color:#B5A896;text-decoration:underline}
 
+/* ===== 목소리 고르기 ===== */
+.voice-pick{
+  display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;
+  background:var(--card);border:1px solid #FFF6EA;border-radius:16px;
+  padding:10px 12px;margin-top:18px;box-shadow:var(--shadow-sm)
+}
+.voice-pick label{font-size:.76rem;font-weight:800;color:var(--muted)}
+.voice-pick select{
+  width:100%;min-width:0;font:inherit;font-size:.84rem;font-weight:600;color:var(--ink);
+  background:#FFFBF4;border:1px solid var(--line);border-radius:11px;padding:9px 30px 9px 10px;
+  appearance:none;-webkit-appearance:none;text-overflow:ellipsis;white-space:nowrap;overflow:hidden;
+  background-image:linear-gradient(45deg,transparent 50%,#B5A896 50%),linear-gradient(135deg,#B5A896 50%,transparent 50%);
+  background-position:calc(100% - 15px) 50%,calc(100% - 10px) 50%;
+  background-size:5px 5px,5px 5px;background-repeat:no-repeat
+}
+.voice-pick .voicebtn{
+  width:42px;height:42px;border-radius:12px;background:#FFF4E5;color:#B5811B;border:1px solid #F6E3C6;
+  display:grid;place-items:center;font-size:1.05rem
+}
+.voice-pick .voicebtn:disabled{opacity:.5}
+.voice-pick .voicehint{grid-column:1 / -1;font-size:.74rem;color:#B5811B}
+.voice-pick .voicehint:empty{display:none}
+
 /* ===== 퀴즈 ===== */
 .qtop{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:4px 2px 12px}
 .qtop .left{display:flex;align-items:center;gap:10px}
@@ -273,6 +296,13 @@ button{font-family:inherit;font-size:1rem;cursor:pointer;border:none;background:
 
     <div class="section-title"><h2>DAY 고르기</h2><span>하루 40문제</span></div>
     <div class="days" id="dayGrid"></div>
+
+    <div class="voice-pick" id="voicePick">
+      <label for="voiceSelect">목소리</label>
+      <select id="voiceSelect"><option value="">자동 · 남성 음성 우선</option></select>
+      <button class="voicebtn" id="voicePreviewBtn" aria-label="목소리 미리 듣기" title="목소리 미리 듣기">🔊</button>
+      <div class="voicehint" id="voiceHint"></div>
+    </div>
 
     <div class="foot">
       <span>기록은 이 기기에 저장돼요</span>
@@ -1502,6 +1532,7 @@ const CORE = (function () {
     heroEyebrow: $('heroEyebrow'), heroDay: $('heroDay'), heroDesc: $('heroDesc'), startBtn: $('startBtn'),
     statDone: $('statDone'), statWrong: $('statWrong'), statRecent: $('statRecent'),
     dayGrid: $('dayGrid'), tipText: $('tipText'), resetBtn: $('resetBtn'),
+    voicePick: $('voicePick'), voiceSelect: $('voiceSelect'), voicePreviewBtn: $('voicePreviewBtn'), voiceHint: $('voiceHint'),
     qDay: $('qDay'), qCount: $('qCount'), qMode: $('qMode'), qReview: $('qReview'),
     progressBar: $('progressBar'), wordEl: $('wordEl'), ipaEl: $('ipaEl'), reviewBadge: $('reviewBadge'),
     statusEl: $('statusEl'), statusText: $('statusText'), heardEl: $('heardEl'),
@@ -1525,6 +1556,7 @@ const CORE = (function () {
     onResultScreen: false,
     voiceUsable: !!SR && 'speechSynthesis' in window,
     cancelListen: null,
+    lastSpeech: null,   // 마지막으로 읽은 방식 (점검·테스트용)
   };
 
   /* ---------- 화면 전환 ---------- */
@@ -1571,23 +1603,107 @@ const CORE = (function () {
   };
 
   /* ---------- 음성 합성 ---------- */
-  function pickVoice() {
-    if (!('speechSynthesis' in window)) return null;
-    const vs = window.speechSynthesis.getVoices() || [];
-    return vs.find((v) => /^en[-_]US/i.test(v.lang) && /google|samantha|aria|jenny|zira/i.test(v.name))
-      || vs.find((v) => /^en[-_]US/i.test(v.lang))
-      || vs.find((v) => /^en/i.test(v.lang))
-      || null;
+  /*  speechSynthesis 의 기본 음성은 기기마다 다르고, 안드로이드 크롬은 영어 음성을
+      하나만 주거나 이름에 성별을 적어 주지 않는 경우가 많다. 그래서
+      1) 영어 음성 목록을 확보하고 (en-US 우선)
+      2) 이름에 남성 표식이 있는 음성을 먼저 고르고 (David·Mark·Guy·Matthew·Alex …)
+      3) 성별을 알 수 없는 음성만 있으면 pitch 를 낮춰 남성 톤에 가깝게 보정한다. */
+  const SPEECH = {
+    rate: 0.98,          // 자연스럽고 또렷한 속도 (0.95~1.0)
+    gapMs: 450,          // 두 번 읽기 사이 간격 — 두 번 합쳐 2.5~3초
+    pitchMale: 1.0,      // 남성 음성은 그대로 (떨림 없이)
+    pitchFemale: 0.92,   // 여성 음성만 있을 때
+    pitchUnknown: 0.9,   // 성별을 알 수 없을 때 (안드로이드 기본 음성 등)
+    storeKey: 'voca-quiz.voice.v1',
+    sampleWord: 'apple',
+  };
+
+  // 이름·voiceURI 에 들어 있는 남성 표식 (윈도우·맥·iOS·안드로이드 대표 남성 음성)
+  const MALE_RE = /\b(male|david|mark|guy|matthew|andrew|christopher|eric|alex|daniel|fred|aaron|george|james|jason|oliver|thomas|brian|arthur|gordon|rishi|tom|diego|liam|ryan|nathan)\b|en[-_]us[-_]x[-_](iom|tpd|iol|iob)/i;
+  // 반대로 여성으로 알려진 음성 — 남성 후보에서 밀어낸다
+  const FEMALE_RE = /\b(female|woman|samantha|aria|jenny|zira|michelle|catherine|allison|ava|susan|victoria|karen|moira|tessa|fiona|serena|nora|emma|amy|joanna|salli|ivy|kendra|kimberly|nicole|olivia|sonia|libby|natasha|clara|hazel|shelley|sandy|penny|kathy|flo)\b|en[-_]us[-_]x[-_]sfg/i;
+
+  const normLang = (l) => String(l || '').replace('_', '-');
+  const isEnglish = (v) => /^en(-|$)/i.test(normLang(v && v.lang));
+  const voiceText = (v) => ((v && v.name) || '') + ' ' + ((v && v.voiceURI) || '');
+
+  function voiceGender(v) {
+    if (!v) return 'unknown';
+    const t = voiceText(v).toLowerCase();
+    if (MALE_RE.test(t)) return 'male';
+    if (FEMALE_RE.test(t)) return 'female';
+    return 'unknown';
   }
+
+  /** 점수가 높을수록 이 앱에 알맞은 음성 (en-US 남성 > en-US 기타 > en-GB > 그 밖의 영어) */
+  function voiceScore(v) {
+    if (!isEnglish(v)) return -1;
+    const lang = normLang(v.lang);
+    let s = /^en-US/i.test(lang) ? 105 : /^en-GB/i.test(lang) ? 70 : 60;
+    const g = voiceGender(v);
+    if (g === 'male') s += 30;
+    else if (g === 'female') s -= 15;
+    if (/local/i.test(String(v.voiceURI || ''))) s += 1;   // 오프라인에서도 들리는 음성
+    return s;
+  }
+
+  function rankVoices(list) {
+    return (list || [])
+      .filter(isEnglish)
+      .map((v) => ({ voice: v, score: voiceScore(v), gender: voiceGender(v) }))
+      .sort((a, b) => b.score - a.score);
+  }
+
+  function englishVoices() {
+    if (!('speechSynthesis' in window)) return [];
+    let all = [];
+    try { all = window.speechSynthesis.getVoices() || []; } catch (e) { all = []; }
+    return all.filter(isEnglish);
+  }
+
+  const voiceId = (v) => String((v && (v.voiceURI || v.name)) || '');
+  function storedVoiceId() { try { return localStorage.getItem(SPEECH.storeKey) || ''; } catch (e) { return ''; } }
+  function saveVoiceId(id) { try { localStorage.setItem(SPEECH.storeKey, id || ''); } catch (e) {} }
+
+  /** 지금 쓸 음성 — 사용자가 고른 음성이 있으면 그것, 없으면 가장 또렷한 남성 음성 */
+  function pickVoice(list) {
+    const arr = list || englishVoices();
+    const wanted = storedVoiceId();
+    if (wanted) {
+      const hit = arr.find((v) => voiceId(v) === wanted) || arr.find((v) => String((v && v.name) || '') === wanted);
+      if (hit) return hit;
+    }
+    const ranked = rankVoices(arr);
+    return ranked.length ? ranked[0].voice : null;
+  }
+
+  function pitchFor(v) {
+    const g = voiceGender(v);
+    return g === 'male' ? SPEECH.pitchMale : g === 'female' ? SPEECH.pitchFemale : SPEECH.pitchUnknown;
+  }
+
+  /** 하이픈으로 이어진 단어·숙어도 원어민이 또렷하게 읽도록 다듬는다 */
+  function speakableText(word) {
+    return String(word == null ? '' : word)
+      .replace(/[\u2010\u2011\u2012\u2013\u2014\u2212]/g, '-')
+      .replace(/-/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
   function speakOnce(word, rate) {
     return new Promise((resolve) => {
       if (!('speechSynthesis' in window)) return resolve();
-      const u = new SpeechSynthesisUtterance(word);
-      u.lang = 'en-US';
-      u.rate = rate;
-      u.pitch = 1.02;
+      const text = speakableText(word);
+      if (!text) return resolve();
       const v = pickVoice();
-      if (v) u.voice = v;
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = v ? normLang(v.lang) : 'en-US';   // 영어임을 명시 (한국어 음성으로 읽히지 않게)
+      u.rate = Math.max(0.9, Math.min(1.1, rate || SPEECH.rate));
+      u.pitch = pitchFor(v);
+      u.volume = 1;
+      if (v) { try { u.voice = v; } catch (e) {} }
+      S.lastSpeech = { text: text, lang: u.lang, rate: u.rate, pitch: u.pitch, voice: v ? String(v.name || '') : '(기기 기본)' };
       let done = false;
       const fin = () => { if (!done) { done = true; resolve(); } };
       u.onend = fin;
@@ -1596,9 +1712,58 @@ const CORE = (function () {
       try { window.speechSynthesis.speak(u); } catch (e) { fin(); }
     });
   }
+
+  function voiceLabel(v) {
+    const g = voiceGender(v);
+    const tag = g === 'male' ? '남성' : g === 'female' ? '여성' : '기본';
+    return String(v.name || v.lang) + ' · ' + tag + ' (' + normLang(v.lang) + ')';
+  }
+
+  /** 홈의 '목소리' 드롭다운 — 기기에 있는 영어 음성을 좋은 순서로 채운다 */
+  function refreshVoiceSelect() {
+    if (!el.voiceSelect) return;
+    const list = englishVoices();
+    const ranked = rankVoices(list).map((r) => r.voice);
+    const wanted = storedVoiceId();
+    const keep = el.voiceSelect.value;
+    el.voiceSelect.innerHTML = '';
+    const auto = document.createElement('option');
+    auto.value = '';
+    auto.textContent = ranked.length && voiceGender(ranked[0]) === 'male'
+      ? '자동 · 남성 음성 우선'
+      : '자동 · 가장 또렷한 영어 음성';
+    el.voiceSelect.appendChild(auto);
+    const seen = {};
+    ranked.forEach((v) => {
+      const id = voiceId(v);
+      if (!id || seen[id]) return;
+      seen[id] = true;
+      const o = document.createElement('option');
+      o.value = id;
+      o.textContent = voiceLabel(v);
+      el.voiceSelect.appendChild(o);
+    });
+    el.voiceSelect.value = (wanted && seen[wanted]) ? wanted : (keep && seen[keep] ? keep : '');
+    if (el.voiceHint) el.voiceHint.textContent = list.length ? '' : '이 기기에서 영어 음성을 찾지 못했어요. 기본 음성으로 읽습니다.';
+  }
+
+  /** 음성 목록은 늦게 도착할 수 있다 (안드로이드 크롬은 onvoiceschanged 뒤에 채워진다) */
+  function waitForVoices(maxMs) {
+    return new Promise((resolve) => {
+      if (!('speechSynthesis' in window)) return resolve([]);
+      const start = Date.now();
+      const step = () => {
+        const list = englishVoices();
+        if (list.length || Date.now() - start >= (maxMs || 2000)) return resolve(list);
+        setTimeout(step, 120);
+      };
+      step();
+    });
+  }
+
   if ('speechSynthesis' in window) {
-    window.speechSynthesis.onvoiceschanged = () => {};
-    window.speechSynthesis.getVoices();
+    englishVoices();
+    window.speechSynthesis.onvoiceschanged = () => { refreshVoiceSelect(); };
   }
 
   /* ---------- 상태 표시 ---------- */
@@ -1868,6 +2033,7 @@ const CORE = (function () {
     S.answered = false;
     audio();       // 사용자 조작 시점에 오디오 준비
     warmUpMic();   // 마이크 권한을 미리 물어 둔다 (첫 문제 끊김 방지)
+    waitForVoices(2000).then(refreshVoiceSelect);   // 음성 목록이 늦게 와도 첫 문제부터 남성 음성으로
     show(el.quiz);
     runQuestion();
   }
@@ -1909,15 +2075,15 @@ const CORE = (function () {
       return;
     }
 
-    // 1) 단어 두 번 듣기
+    // 1) 단어 두 번 듣기 — 또렷한 속도(0.98)로, 0.45초 간격
     setStatus('listening', '🔊 단어를 두 번 들려줄게요 (1/2)', true);
     try { window.speechSynthesis.cancel(); } catch (e) {}
-    await speakOnce(w.word, 0.72);
+    await speakOnce(w.word, SPEECH.rate);
     if (token !== S.token) return;
-    await sleep(600);
+    await sleep(SPEECH.gapMs);
     if (token !== S.token) return;
     setStatus('listening', '🔊 한 번 더! (2/2)', true);
-    await speakOnce(w.word, 0.72);
+    await speakOnce(w.word, SPEECH.rate);
     if (token !== S.token) return;
 
     // 2) 비프음 — 소리가 완전히 끝나고 200ms 뒤에 인식을 시작한다 (오디오 포커스 충돌 방지)
@@ -2079,7 +2245,7 @@ const CORE = (function () {
     const token = S.token;   // cancelFlow가 토큰을 올린 뒤의 값으로 진행
     setStatus('listening', '🔊 다시 들려줄게요', true);
     try { window.speechSynthesis.cancel(); } catch (e) {}
-    await speakOnce(q.word.word, 0.72);
+    await speakOnce(q.word.word, SPEECH.rate);
     if (token !== S.token) return;
     await sleep(REC_BEEP_GAP_MS + 120);
     if (token !== S.token) return;
@@ -2141,18 +2307,42 @@ const CORE = (function () {
     renderHome();
   });
 
+  // 목소리 고르기 · 미리 듣기 (홈 하단)
+  if (el.voiceSelect) {
+    el.voiceSelect.addEventListener('change', () => {
+      saveVoiceId(el.voiceSelect.value);
+      refreshVoiceSelect();
+    });
+  }
+  if (el.voicePreviewBtn) {
+    el.voicePreviewBtn.addEventListener('click', async () => {
+      try { window.speechSynthesis.cancel(); } catch (e) {}
+      el.voicePreviewBtn.disabled = true;
+      await speakOnce(SPEECH.sampleWord, SPEECH.rate);
+      el.voicePreviewBtn.disabled = false;
+    });
+  }
+
   /* ---------- 시작 ---------- */
   function boot() {
     S.state = CORE.loadState();
     renderHome();
+    refreshVoiceSelect();
+    if ('speechSynthesis' in window) waitForVoices(2500).then(refreshVoiceSelect);
     if (location.hash === '#test' && typeof RUN_TESTS === 'function') {
       show(el.test);
       RUN_TESTS();
     }
   }
 
-  window.APP = { S, startDay, show, renderHome, submitAnswer, el, finishExam, nextQuestion, runQuestion };
-  boot();
+  window.APP = {
+    S, SPEECH, startDay, show, renderHome, submitAnswer, el, finishExam, nextQuestion, runQuestion,
+    speech: { SPEECH, rankVoices, pickVoice, voiceGender, voiceScore, pitchFor, speakableText,
+              englishVoices, refreshVoiceSelect, saveVoiceId, storedVoiceId, voiceLabel, waitForVoices },
+  };
+  // test.js(RUN_TESTS)가 먼저 정의된 뒤에 시작하도록 DOMContentLoaded 를 기다린다
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
 })();
 </script>
 <script>/* =========================================================
@@ -2366,6 +2556,88 @@ function RUN_TESTS() {
     return { ok: missing.length === 0, detail: missing.join(',') };
   });
   check('화면: DAY 50개 버튼이 그려진다', () => document.querySelectorAll('#dayGrid .daybtn').length === 50);
+
+  /* ---------- 9. 발음 · 목소리 ---------- */
+  const SP = (window.APP && window.APP.speech) || null;
+  const V = (name, lang, uri) => ({ name: name, lang: lang || 'en-US', voiceURI: uri || name });
+  function autoPick(list) {
+    const keep = SP.storedVoiceId();
+    try { SP.saveVoiceId(''); return SP.pickVoice(list); } finally { SP.saveVoiceId(keep); }
+  }
+  check('음성: 한국어 음성은 영어 발음 후보에서 뺀다', () => {
+    const r = SP.rankVoices([V('한국어', 'ko-KR'), V('English (United States)', 'en-US')]);
+    return { ok: r.length === 1 && /^en-US/.test(r[0].voice.lang), detail: r.length + '개' };
+  });
+  check('음성: 남성 이름 음성이 여성 이름 음성보다 높은 점수', () => {
+    const d = SP.voiceScore(V('Microsoft David - English (United States)'));
+    const z = SP.voiceScore(V('Microsoft Zira - English (United States)'));
+    return { ok: d > z, detail: d + ' > ' + z };
+  });
+  check('음성: 윈도우 목록 → David(남성) 선택', () => {
+    const v = autoPick([
+      V('Microsoft Zira - English (United States)', 'en-US', 'zira'),
+      V('Microsoft David - English (United States)', 'en-US', 'david'),
+      V('Microsoft Hazel - English (United Kingdom)', 'en-GB', 'hazel'),
+    ]);
+    return { ok: !!v && v.voiceURI === 'david', detail: v ? v.name : 'none' };
+  });
+  check('음성: 맥 목록 → Alex(남성) 선택 (Samantha 보다 우선)', () => {
+    const v = autoPick([V('Samantha'), V('Daniel', 'en-GB'), V('Alex')]);
+    return { ok: !!v && v.name === 'Alex', detail: v ? v.name : 'none' };
+  });
+  check('음성: 크롬 데스크톱 목록 → Google US English 선택', () => {
+    const v = autoPick([
+      V('Google UK English Male', 'en-GB'),
+      V('Google UK English Female', 'en-GB'),
+      V('Google US English', 'en-US'),
+    ]);
+    return { ok: !!v && v.name === 'Google US English', detail: v ? v.name : 'none' };
+  });
+  check('음성: 미국식 발음을 우선 (en-US 여성 > en-GB 남성)', () => {
+    const v = autoPick([V('Daniel', 'en-GB'), V('Samantha', 'en-US')]);
+    return { ok: !!v && v.name === 'Samantha', detail: v ? v.name : 'none' };
+  });
+  check('음성: 안드로이드 남성 코드(iom)를 기본 음성(sfg)보다 우선', () => {
+    const v = autoPick([
+      V('English (United States)', 'en-US', 'en-us-x-sfg-local'),
+      V('English (United States)', 'en-US', 'en-us-x-iom-local'),
+    ]);
+    return { ok: !!v && /iom/.test(v.voiceURI), detail: v ? v.voiceURI : 'none' };
+  });
+  check('음성: 영어 음성이 하나뿐이어도 그 음성을 쓴다', () => {
+    const v = autoPick([V('English (United States)', 'en-US', 'en-US')]);
+    return { ok: !!v && v.name === 'English (United States)', detail: v ? v.name : 'none' };
+  });
+  check('음성: pitch 보정 (남성 1.0 / 여성 0.92 / 불명 0.9)', () => {
+    const m = SP.pitchFor(V('Microsoft David'));
+    const f = SP.pitchFor(V('Samantha'));
+    const u = SP.pitchFor(V('English (United States)', 'en-US', 'en-US'));
+    return { ok: m === 1 && f === 0.92 && u === 0.9 && SP.pitchFor(null) === 0.9, detail: [m, f, u].join(' / ') };
+  });
+  check('음성: 속도 0.95~1.0 · 두 번 간격 0.5초 이하', () => {
+    const r = SP.SPEECH.rate, g = SP.SPEECH.gapMs;
+    return { ok: r >= 0.95 && r <= 1.0 && g > 0 && g <= 500, detail: 'rate ' + r + ' / gap ' + g + 'ms' };
+  });
+  check('음성: 하이픈 단어·숙어를 또렷하게 다듬는다', () => {
+    const a = SP.speakableText('well-known');
+    const b = SP.speakableText('greenhouse effect');
+    const c = SP.speakableText('  take   off  ');
+    return { ok: a === 'well known' && b === 'greenhouse effect' && c === 'take off', detail: a + ' / ' + b + ' / ' + c };
+  });
+  check('음성: 사용자가 고른 음성이 자동 선택보다 우선', () => {
+    const keep = SP.storedVoiceId();
+    try {
+      SP.saveVoiceId('zira');
+      const v = SP.pickVoice([V('Microsoft David - English (United States)', 'en-US', 'david'), V('Microsoft Zira - English (United States)', 'en-US', 'zira')]);
+      return { ok: !!v && v.voiceURI === 'zira', detail: v ? v.name : 'none' };
+    } finally { SP.saveVoiceId(keep); }
+  });
+  check('화면: 목소리 드롭다운·미리 듣기 버튼이 있다', () => {
+    const sel = document.getElementById('voiceSelect');
+    const btn = document.getElementById('voicePreviewBtn');
+    const auto = !!(sel && sel.options[0] && sel.options[0].value === '');
+    return { ok: !!sel && !!btn && auto, detail: sel ? sel.options.length + '개 옵션' : '없음' };
+  });
 
   /* ---------- 출력 ---------- */
   results.all = out;
