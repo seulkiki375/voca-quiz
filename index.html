@@ -262,6 +262,14 @@ b{font-weight:800}
 }
 .voice-item.sel{background:var(--blue-soft);border:1.5px solid var(--blue);font-weight:800}
 .voice-item small{color:var(--muted);font-size:11.5px;font-weight:500}
+.voice-now{background:var(--mint-soft);border-radius:16px;padding:12px 14px;margin-bottom:12px;display:flex;flex-direction:column;gap:3px}
+.voice-now-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.vn-label{font-size:11.5px;font-weight:800;color:#0b7a58;letter-spacing:.02em}
+.vn-preview{background:#fff;border-radius:10px;padding:7px 12px;font-size:12.5px;font-weight:800;color:var(--blue);box-shadow:0 1px 3px rgba(20,32,74,.10)}
+.voice-now b{font-size:15px;color:var(--ink)}
+.vn-tune{font-size:11.5px;color:#3c7d68;line-height:1.45}
+.voice-note{margin-top:6px}
+.voice-note b{color:var(--ink-2);font-weight:700}
 .sheet-close{margin-top:14px;width:100%;min-height:50px;border-radius:14px;background:#eef1fa;font-weight:800;color:var(--ink-2)}
 
 @media (max-width:360px){
@@ -313,6 +321,7 @@ b{font-weight:800}
       <button id="voiceLink" class="link">🔊 목소리 바꾸기</button>
       <button id="resetBtn" class="link danger">기록 지우기</button>
     </div>
+    <p class="note voice-note">목소리: <b id="voiceHomeName">확인 중…</b></p>
     <p class="note">기록은 이 기기 브라우저에만 저장돼요.</p>
   </section>
 
@@ -399,7 +408,15 @@ b{font-weight:800}
 <div class="sheet" id="voiceSheet" hidden>
   <div class="sheet-card">
     <h3>목소리 고르기</h3>
-    <p>영어 단어를 읽어 줄 목소리예요. 기본은 원어민 남성 목소리를 먼저 골라요.</p>
+    <p>영어 단어를 읽어 줄 목소리예요. 부드러운 남성 목소리를 먼저 골라요.</p>
+    <div class="voice-now">
+      <div class="voice-now-top">
+        <span class="vn-label">지금 목소리</span>
+        <button type="button" class="vn-preview" id="voicePreview">▶ 미리 듣기</button>
+      </div>
+      <b id="voiceNowName">–</b>
+      <span class="vn-tune" id="voiceNowTune"></span>
+    </div>
     <div class="voice-list" id="voiceList"></div>
     <button class="sheet-close" id="voiceClose">닫기</button>
   </div>
@@ -479,13 +496,14 @@ var VQ = (function () {
   }
 
   /* ---------- 낭독 시간 계산 ---------- */
-  // rate 0.95 기준 대략치 (영어: 글자당 ~80ms, 한국어: 음절당 ~235ms)
+  // 부드러운 남성 톤(영어 rate 0.92 · 음높이 0.94) / 한국어(rate 1.02) 기준 대략치
+  // (영어: 글자당 ~84ms, 한국어: 음절당 ~242ms)
   var SPEECH_CAP_MS = 4000;
   function estimateEnMs(word) {
     var L = String(word || '').replace(/[^A-Za-z]/g, '').length;
-    return 400 + 80 * L;
+    return 400 + 84 * L;
   }
-  function estimateKoMs(text) { return 150 + 235 * countSyl(text); }
+  function estimateKoMs(text) { return 150 + 242 * countSyl(text); }
 
   /* 오답일 때 읽어 줄 "영어 단어 + 한국어 뜻" 계획.
      전체(단어 낭독 포함)가 4초를 넘지 않도록 뜻을 1~3개로 줄인다. */
@@ -937,32 +955,62 @@ var VQ = (function () {
     var token = 0;
     var manualName = state.voiceName || '';
 
-    var MALE_TOKENS = ['male', 'alex', 'daniel', 'aaron', 'david', 'fred', 'guy', 'mark', 'nathan',
-      'tom', 'oliver', 'arthur', 'gordon', 'junior', 'rishi', 'diego', 'jorge', 'lee'];
-    var FEMALE_NAMES = ['samantha', 'victoria', 'karen', 'moira', 'tessa', 'fiona', 'zira', 'susan',
-      'allison', 'ava', 'serena', 'kate', 'nicky', 'joanna', 'salli', 'amy', 'emma', 'kyoko',
-      'google uk english female', 'female'];
+    // 음성 이름 조각으로 성별을 판단한다 (Android·Chrome·iOS 공통 이름)
+    var FEMALE_NAMES = ['female', 'samantha', 'victoria', 'karen', 'moira', 'tessa', 'fiona',
+      'zira', 'susan', 'allison', 'ava', 'serena', 'kate', 'nicky', 'joanna', 'salli', 'amy',
+      'emma', 'kyoko', 'yuna'];
+    var MALE_NAMES = ['male', 'andrew', 'brian', 'matthew', 'guy', 'christopher', 'alex',
+      'daniel', 'aaron', 'arthur', 'david', 'fred', 'gordon', 'lee', 'mark', 'nathan',
+      'oliver', 'rishi', 'tom', 'junior', 'diego', 'jorge', 'albert', 'oscar', 'liam',
+      'ryan', 'eric', 'thomas', 'james', 'john'];
+    // 안드로이드 기기의 남성 음성 코드 (en-us-x-iom · en-us-x-tpd · en-us-x-iol 계열)
+    var MALE_CODES = ['iom', 'tpd', 'iol'];
+    var ROBOTIC = ['espeak', 'compact', 'pico', 'festival'];
 
     function tokens(name) {
       return String(name || '').toLowerCase().split(/[\s\-_()\[\],.]+/).filter(Boolean);
     }
+    // 'male' | 'female' | 'neutral' — 이름에 성별 표시가 없으면 neutral
+    function voiceKind(v) {
+      var name = (v && v.name) || '';
+      var t = tokens(name);
+      var lower = String(name).toLowerCase();
+      for (var f = 0; f < FEMALE_NAMES.length; f++) {
+        if (FEMALE_NAMES[f] === 'female') {
+          if (lower.indexOf('female') >= 0) return 'female';
+        } else if (t.indexOf(FEMALE_NAMES[f]) >= 0) return 'female';
+      }
+      for (var m = 0; m < MALE_NAMES.length; m++) {
+        if (t.indexOf(MALE_NAMES[m]) >= 0) return 'male';
+      }
+      for (var c = 0; c < MALE_CODES.length; c++) {
+        if (t.indexOf(MALE_CODES[c]) >= 0) return 'male';
+      }
+      return 'neutral';
+    }
+    /* 점수: 부드러운 남성 음성 최우선 → 미국식 → 영국식 → 그 밖의 영어.
+       여성 음성과 기계음은 뒤로 밀고, 네트워크(고음질) 음성은 살짝 우대한다. */
     function scoreEn(v) {
       var lang = String(v.lang || '').toLowerCase().replace('_', '-');
       var s;
-      if (lang.indexOf('en-us') === 0) s = 16;
-      else if (lang.indexOf('en-gb') === 0) s = 11;
-      else if (lang.indexOf('en') === 0) s = 7;
+      if (lang.indexOf('en-us') === 0) s = 40;
+      else if (lang.indexOf('en-gb') === 0) s = 24;
+      else if (lang.indexOf('en') === 0) s = 14;
       else return -1;
+      var kind = voiceKind(v);
+      if (kind === 'male') s += 60;
+      else if (kind === 'female') s -= 40;
       var t = tokens(v.name);
-      if (t.indexOf('male') >= 0) s += 14;
-      for (var i = 0; i < MALE_TOKENS.length; i++) {
-        if (t.indexOf(MALE_TOKENS[i]) >= 0) { s += 9; break; }
+      for (var i = 0; i < MALE_CODES.length; i++) {
+        if (t.indexOf(MALE_CODES[i]) >= 0) { s += 10; break; }
       }
       var lower = String(v.name || '').toLowerCase();
-      for (var j = 0; j < FEMALE_NAMES.length; j++) {
-        if (lower.indexOf(FEMALE_NAMES[j]) >= 0) { s -= 10; break; }
+      for (var j = 0; j < ROBOTIC.length; j++) {
+        if (lower.indexOf(ROBOTIC[j]) >= 0) { s -= 35; break; }
       }
-      if (v.localService) s += 2;
+      if (lower.indexOf('google') >= 0) s += 4;
+      if (v.localService === false) s += 3;
+      if (t.indexOf('network') >= 0) s += 3;
       return s;
     }
     function bestEn(list) {
@@ -1003,13 +1051,30 @@ var VQ = (function () {
       setTimeout(refresh, 1800);
     }
 
-    function utter(text, lang, voice, rate) {
+    /* 부드러운 남성 톤 조정값 — 목소리에 따라 다르게 잡는다
+       male    : 기기에서 남성 음성을 잡았을 때 → 조금 낮고 차분하게
+       neutral : 성별 표시가 없는 기본 영어 음성(Google US English 등) → 남성 톤으로 내리고 천천히
+       female  : 남성 음성이 아예 없을 때 → 들리는 톤만 남성 쪽으로 낮춘다 */
+    var EN_TUNE = {
+      male: { rate: 0.92, pitch: 0.94 },
+      neutral: { rate: 0.91, pitch: 0.86 },
+      female: { rate: 0.91, pitch: 0.82 }
+    };
+    // 한국어 뜻 낭독도 같은 결로 (4초 상한은 화면 쪽에서 지킨다)
+    var KO_TUNE = { rate: 1.02, pitch: 0.93 };
+    function enTune(v) {
+      return EN_TUNE[voiceKind(v || chosen.en || { name: '' })] || EN_TUNE.neutral;
+    }
+    var spoken = [];   // 실제로 엔진에 넘긴 발화값 (확인용)
+    function utter(text, lang, voice, rate, pitch) {
       var u = new UT(text);
       u.lang = lang;
       if (voice) u.voice = voice;
       u.rate = rate || 1;
-      u.pitch = 1;
+      u.pitch = (pitch === undefined || pitch === null) ? 1 : pitch;
       u.volume = 1;
+      spoken.unshift({ text: text, lang: lang, rate: u.rate, pitch: u.pitch, voice: voice ? voice.name : '' });
+      if (spoken.length > 8) spoken.pop();
       return u;
     }
     function cancel() {
@@ -1022,8 +1087,9 @@ var VQ = (function () {
       cancel();
       var my = token;
       var v = chosen.en;
-      var u1 = utter(word, 'en-US', v, 0.95);
-      var u2 = utter(word, 'en-US', v, 0.95);
+      var tune = enTune(v);
+      var u1 = utter(word, 'en-US', v, tune.rate, tune.pitch);
+      var u2 = utter(word, 'en-US', v, tune.rate, tune.pitch);
       var finished = 0;
       var safety = setTimeout(function () { if (done) done(); }, 800 + (VQ.estimateEnMs(word) * 2) + 1600);
       function once() {
@@ -1049,8 +1115,9 @@ var VQ = (function () {
       if (!enabled) { if (done) setTimeout(done, 400); return; }
       cancel();
       var my = token;
-      var u1 = utter(plan.en, 'en-US', chosen.en, 0.95);
-      var u2 = utter(plan.ko, 'ko-KR', chosen.ko, 1.05);
+      var tune = enTune(chosen.en);
+      var u1 = utter(plan.en, 'en-US', chosen.en, tune.rate, tune.pitch);
+      var u2 = utter(plan.ko, 'ko-KR', chosen.ko, KO_TUNE.rate, KO_TUNE.pitch);
       var called = false;
       function finish() {
         if (called) return;
@@ -1078,12 +1145,36 @@ var VQ = (function () {
       list: function () { return all.slice(); },
       setVoice: function (name) { manualName = name || ''; refresh(); },
       currentName: function () { return chosen.en ? chosen.en.name : ''; },
+      kindOf: function (name) { return voiceKind({ name: name || '' }); },
+      info: function () {
+        var v = chosen.en, tune = enTune(v);
+        return {
+          name: v ? v.name : '', lang: v ? v.lang : '',
+          kind: v ? voiceKind(v) : 'none',
+          rate: tune.rate, pitch: tune.pitch,
+          mode: manualName ? 'manual' : 'auto',
+          koName: chosen.ko ? chosen.ko.name : '',
+          koRate: KO_TUNE.rate, koPitch: KO_TUNE.pitch
+        };
+      },
+      lastUtterances: function () { return spoken.slice(); },
+      // 확인용: 주어진 음성 목록에서 자동 선택이 무엇을 고를지
+      pickFrom: function (list) {
+        var v = bestEn((list || []).map(function (x) {
+          return { name: x.name, lang: x.lang, localService: x.localService !== false };
+        }));
+        if (!v) return null;
+        var tune = enTune(v);
+        return { name: v.name, kind: voiceKind(v), rate: tune.rate, pitch: tune.pitch };
+      },
       preview: function (name) {
         if (!enabled) return;
         cancel();
         var v = null;
         for (var i = 0; i < all.length; i++) if (all[i].name === name) v = all[i];
-        var u = utter('respect', 'en-US', v || chosen.en, 0.95);
+        var pick = v || chosen.en;
+        var tune = enTune(pick);
+        var u = utter('respect', 'en-US', pick, tune.rate, tune.pitch);
         try { synth.speak(u); } catch (e) { }
       }
     };
@@ -1110,6 +1201,8 @@ var VQ = (function () {
     resultFinalCard: $('resultFinalCard'), resultFinalDesc: $('resultFinalDesc'), resultFinalStart: $('resultFinalStart'),
     voiceBtn: $('voiceBtn'), voiceLink: $('voiceLink'), voiceSheet: $('voiceSheet'),
     voiceList: $('voiceList'), voiceClose: $('voiceClose'),
+    voiceNowName: $('voiceNowName'), voiceNowTune: $('voiceNowTune'), voicePreview: $('voicePreview'),
+    voiceHomeName: $('voiceHomeName'),
     resetBtn: $('resetBtn'),
     testSummary: $('testSummary'), testList: $('testList')
   };
@@ -1143,6 +1236,10 @@ var VQ = (function () {
     var all = VQ.allDaysDone(state);
     var remaining = all ? finalRemaining() : 0;
 
+    if (els.voiceHomeName) {
+      els.voiceHomeName.textContent = Speech.enabled
+        ? (Speech.currentName() || '기기 기본 목소리') : '이 브라우저는 낭독을 지원하지 않아요';
+    }
     els.statDays.textContent = done + ' / 50';
     els.statWrong.textContent = state.wrong.length + '개';
     els.statWrong.className = state.wrong.length ? 'coral' : 'mint';
@@ -1434,16 +1531,43 @@ var VQ = (function () {
   /* ---------------------------------------------------------
      목소리 선택
      --------------------------------------------------------- */
+  function kindKo(kind) {
+    return kind === 'male' ? '남성 음성'
+      : kind === 'female' ? '여성 음성'
+        : kind === 'none' ? '기기 기본 낭독' : '성별 표시 없는 음성';
+  }
+
+  // 지금 적용된 목소리 이름과 조정값(속도·음높이)을 보여 준다
+  function renderVoiceNow() {
+    var info = Speech.info();
+    if (els.voiceNowName) els.voiceNowName.textContent = info.name || '기기 기본 목소리';
+    if (els.voiceNowTune) {
+      var tone = info.kind === 'male' ? '부드러운 남성 톤'
+        : info.kind === 'none' ? '기기 기본 톤'
+          : '남성 톤으로 조정';
+      els.voiceNowTune.textContent = kindKo(info.kind) + ' · ' + tone +
+        ' · 속도 ' + info.rate.toFixed(2) + ' · 음높이 ' + info.pitch.toFixed(2);
+    }
+  }
+
   function renderVoiceSheet() {
+    renderVoiceNow();
     var list = Speech.list().filter(function (v) {
       return String(v.lang || '').toLowerCase().indexOf('en') === 0;
+    });
+    // 남성 음성을 목록 위쪽으로
+    list.sort(function (a, b) {
+      var rank = { male: 0, neutral: 1, female: 2 };
+      var ra = rank[Speech.kindOf(a.name)], rb = rank[Speech.kindOf(b.name)];
+      if (ra !== rb) return ra - rb;
+      return String(a.name).localeCompare(String(b.name));
     });
     els.voiceList.innerHTML = '';
 
     var auto = document.createElement('button');
     auto.type = 'button';
     auto.className = 'voice-item' + (state.voiceName ? '' : ' sel');
-    auto.innerHTML = '<span>자동 <small>원어민 남성 우선</small></span><span>' +
+    auto.innerHTML = '<span>자동 <small>부드러운 남성 음성 우선</small></span><span>' +
       (Speech.currentName() ? '지금: ' + Speech.currentName() : '') + '</span>';
     auto.onclick = function () {
       state.voiceName = ''; save(); Speech.setVoice('');
@@ -1465,7 +1589,8 @@ var VQ = (function () {
       var label = document.createElement('span');
       label.textContent = v.name;
       var small = document.createElement('small');
-      small.textContent = (v.lang || '') + (v.localService ? '' : ' · 다운로드');
+      small.textContent = (v.lang || '') + ' · ' + kindKo(Speech.kindOf(v.name)) +
+        (v.localService === false ? ' · 온라인' : '');
       var right = document.createElement('span');
       right.appendChild(small);
       b.appendChild(label); b.appendChild(right);
@@ -1476,7 +1601,10 @@ var VQ = (function () {
       els.voiceList.appendChild(b);
     });
   }
-  App.onVoices = function () { if (!els.voiceSheet.hidden) renderVoiceSheet(); };
+  App.onVoices = function () {
+    if (els.voiceHomeName && App.screen === 'home') renderHome();
+    if (!els.voiceSheet.hidden) renderVoiceSheet();
+  };
 
   /* ---------------------------------------------------------
      이벤트
@@ -1514,6 +1642,9 @@ var VQ = (function () {
     renderVoiceSheet();
     els.voiceSheet.hidden = false;
   };
+  if (els.voicePreview) {
+    els.voicePreview.onclick = function () { Speech.preview(Speech.currentName()); };
+  }
   els.voiceClose.onclick = function () { els.voiceSheet.hidden = true; };
   els.voiceSheet.onclick = function (e) { if (e.target === els.voiceSheet) els.voiceSheet.hidden = true; };
 
