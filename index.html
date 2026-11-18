@@ -566,7 +566,7 @@ var VQ = (function () {
     pickedKey[normKey(answerText)] = 1;
     var picked = [];
 
-    function usable(c, allowStale) {
+    function okCand(c, allowStale) {
       if (c.wordId === w.id) return false;
       if (pickedKey[c.key]) return false;
       if (w.keys[c.key]) return false;                   // 정답 단어의 다른 뜻
@@ -582,7 +582,7 @@ var VQ = (function () {
       tries++;
       var cand = pool[Math.floor(rnd() * n) % n];
       if (!cand) continue;
-      if (usable(cand, tries > limit / 2)) {
+      if (okCand(cand, tries > limit / 2)) {
         pickedKey[cand.key] = 1;
         picked.push(cand);
       }
@@ -592,7 +592,7 @@ var VQ = (function () {
       var order = shuffle(pool, rnd);
       for (var ci = 0; ci < order.length && picked.length < 4; ci++) {
         var c2 = order[ci];
-        if (!usable(c2, true)) continue;
+        if (!okCand(c2, true)) continue;
         pickedKey[c2.key] = 1;
         picked.push(c2);
       }
