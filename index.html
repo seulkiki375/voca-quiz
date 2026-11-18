@@ -1124,10 +1124,15 @@ const CORE = (function () {
     let t = String(s).trim().toLowerCase();
     t = stripPunct(t);
     t = t.replace(/\s+/g, '');
-    // 끝에 붙은 존댓말/서술격 조사 제거 (반복)
+    return t;
+  }
+
+  const FILLER_HEAD = /^(음+|어+|아+|그+|저기요|저기|정답은|답은|뜻은|그러니까|그게|그건|이거|이건|뭐지|뭐였지)[\s,.…]+/;
+  function stripFillers(s) {
+    let t = String(s || '').trim();
     for (let i = 0; i < 3; i++) {
       const before = t;
-      t = t.replace(POLITE, '');
+      t = t.replace(FILLER_HEAD, '').trim();
       if (t === before) break;
     }
     return t;
@@ -1179,24 +1184,26 @@ const CORE = (function () {
     return t;
   }
 
-  /** 한 표현이 가질 수 있는 비교용 키 집합 */
+  /** 한 표현이 가질 수 있는 비교용 키 집합 (원형은 지우지 않고 변형을 더한다) */
   function keysOf(s) {
     const base = normKey(s);
     const set = new Set();
     if (!base) return set;
-    set.add(base);
-    const v = verbStem(base);
-    if (v) set.add(v);
-    const a = adjStem(base);
-    if (a) set.add(a);
-    const noSuffix = base.replace(/(적으로|적인|적)$/, '');
-    if (noSuffix) set.add(noSuffix);
-    const c = applyContract(base);
-    if (c) {
-      set.add(c);
-      const cv = verbStem(c);
-      if (cv) set.add(cv);
+    const bases = [base];
+    const noPolite = base.replace(POLITE, '');
+    if (noPolite && noPolite !== base) bases.push(noPolite);
+    for (const k of bases) {
+      set.add(k);
+      set.add(verbStem(k));
+      set.add(adjStem(k));
+      set.add(k.replace(/(적으로|적인|적)$/, ''));
+      const c = applyContract(k);
+      if (c) {
+        set.add(c);
+        set.add(verbStem(c));
+      }
     }
+    set.delete('');
     return set;
   }
 
@@ -1255,14 +1262,14 @@ const CORE = (function () {
 
   /* ---------- 4. 품사 추론 ---------- */
   function inferPos(raw) {
-    const t = normKey(raw);
+    const t = normKey(stripFillers(raw));
     if (!t) return 'n';
     if (VERB_TAIL.test(t)) return 'v';
-    if (/(하|되|시키|있|없|않|나|오|가|보|주|받|먹|마시|만들|쓰|듣|말하|살|죽|울|웃)(다|는|ㄴ|은)$/.test(t)) return 'v';
+    if (/다$/.test(t)) return 'v';              // 강제하다·끌다·받아들이다
+    if (/(하는|되는|시키는|있는|없는|않는)$/.test(t)) return 'a';
     const last = t.slice(-1);
-    if ('한은운던'.includes(last)) return 'a';
+    if ('한은운던는'.includes(last)) return 'a';  // 긴급한·높은·무거운
     if (/(히|게|로|써|도록|만큼|처럼)$/.test(t)) return 'ad';
-    if (isEmptyable(t) && t.length > 1) return 'a';
     return 'n';
   }
 
@@ -1288,7 +1295,7 @@ const CORE = (function () {
    * @returns {ok, reason: 'correct'|'wrong'|'pos'|'none', sense}
    */
   function grade(wordEntry, answer) {
-    const text = (answer || '').trim();
+    const text = stripFillers((answer || '').trim());
     if (!text) return { ok: false, reason: 'none', sense: null };
     const saidPos = inferPos(text);
 
@@ -2125,7 +2132,7 @@ function RUN_TESTS() {
   });
 
   /* ---------- 7. 결과 반영 · 저장 ---------- */
-  check('결과: 정답률 계산 (45문제 중 10개 오답 → 78%)', () => {
+  check('결과: 정답률 계산 (40문제 중 5개 오답 → 88%)', () => {
     const st = CORE.emptyState();
     const ex = CORE.composeExam(st, 1);
     const res = ex.questions.map((q, i) => ({ id: q.id, ok: i >= 5 }));
