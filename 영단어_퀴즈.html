@@ -861,8 +861,34 @@ var VQ = (function () {
   var FAST = params.has('fast');
   var $ = function (id) { return document.getElementById(id); };
 
+  // 파일로 바로 열면(안드로이드 크롬 등) localStorage 접근이 막힐 수 있어 안전하게 감싼다
+  var Store = (function () {
+    var mem = {}, ok = false;
+    try {
+      window.localStorage.setItem('__vq_probe__', '1');
+      window.localStorage.removeItem('__vq_probe__');
+      ok = true;
+    } catch (e) { ok = false; }
+    return {
+      ok: ok,
+      get: function () {
+        if (ok) { try { return window.localStorage.getItem(VQ.STORE_KEY); } catch (e) { } }
+        return mem[VQ.STORE_KEY] || null;
+      },
+      set: function (text) {
+        if (ok) { try { window.localStorage.setItem(VQ.STORE_KEY, text); return true; } catch (e) { } }
+        mem[VQ.STORE_KEY] = text;
+        return false;
+      },
+      clear: function () {
+        try { window.localStorage.removeItem(VQ.STORE_KEY); } catch (e) { }
+        delete mem[VQ.STORE_KEY];
+      }
+    };
+  })();
+
   var ix = VQ.buildIndex(VOCAB);
-  var state = VQ.loadState(localStorage.getItem(VQ.STORE_KEY));
+  var state = VQ.loadState(Store.get());
   var App = { screen: 'home', session: null, kind: null, day: null, fast: FAST };
   window.__app = App;
 
@@ -1088,7 +1114,10 @@ var VQ = (function () {
     testSummary: $('testSummary'), testList: $('testList')
   };
 
-  function save() { VQ.saveState(state, localStorage); }
+  function save() {
+    state.updatedAt = new Date().toISOString();
+    Store.set(JSON.stringify(state));
+  }
 
   function show(name) {
     App.screen = name;
@@ -1490,7 +1519,7 @@ var VQ = (function () {
 
   els.resetBtn.onclick = function () {
     if (!confirm('모든 기록을 지울까요?\nDAY 완료 기록과 누적 오답이 모두 사라져요.')) return;
-    try { localStorage.removeItem(VQ.STORE_KEY); } catch (e) { }
+    Store.clear();
     state = VQ.defaultState();
     save();
     renderHome();
@@ -1511,6 +1540,14 @@ var VQ = (function () {
   /* ---------------------------------------------------------
      시작
      --------------------------------------------------------- */
+  if (!Store.ok) {
+    var note = document.querySelector('.note');
+    if (note) {
+      note.textContent = '지금은 기록을 저장할 수 없어요. 파일을 그대로 열면 저장이 막히는 브라우저가 있어요 — 크롬 주소창 메뉴에서 \'홈 화면에 추가\'로 열면 기록이 저장돼요.';
+      note.style.color = '#b4740a';
+    }
+  }
+
   renderHome();
   show('home');
 
