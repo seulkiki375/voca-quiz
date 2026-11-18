@@ -1748,14 +1748,14 @@ const CORE = (function () {
     return 'unknown';
   }
 
-  /** 점수가 높을수록 이 앱에 알맞은 음성 (en-US 남성 > en-US 기타 > en-GB > 그 밖의 영어) */
+  /** 점수가 높을수록 이 앱에 알맞은 음성 — 언어권이 항상 먼저, 그 안에서 남성 음성 우선
+      (en-US > en-GB > 그 밖의 영어 / 같은 언어권이면 남성 > 불명 > 여성) */
   function voiceScore(v) {
     if (!isEnglish(v)) return -1;
     const lang = normLang(v.lang);
-    let s = /^en-US/i.test(lang) ? 105 : /^en-GB/i.test(lang) ? 70 : 60;
+    const tier = /^en-US/i.test(lang) ? 3000 : /^en-GB/i.test(lang) ? 2000 : 1000;
     const g = voiceGender(v);
-    if (g === 'male') s += 30;
-    else if (g === 'female') s -= 15;
+    let s = tier + (g === 'male' ? 100 : g === 'female' ? -50 : 0);
     if (/local/i.test(String(v.voiceURI || ''))) s += 1;   // 오프라인에서도 들리는 음성
     return s;
   }
