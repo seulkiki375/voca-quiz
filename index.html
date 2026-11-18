@@ -1320,6 +1320,8 @@ var VQ = (function () {
   function finishQuiz() {
     var s = App.session;
     if (!s) return;
+    hideFx();
+    els.wordEl.classList.remove('speaking');
     VQ.applySession(state, s, { mode: App.kind, day: App.day });
     save();
     renderResult(s);
