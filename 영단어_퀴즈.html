@@ -1600,6 +1600,7 @@ var VQ_TEST = (function () {
         if (wi % 200 === 199) { summaryEl.textContent = '실행 중… 전수 검사 ' + (wi + 1) + ' / 2000'; await wait(0); }
         var w = VOCAB[wi];
         for (var si = 0; si < w.senses.length; si++) {
+          var wKeys = ix.byId[w.id].keys;
           for (var seedI = 1; seedI <= 2; seedI++) {
             var q;
             try {
@@ -1620,9 +1621,9 @@ var VQ_TEST = (function () {
               if (!o.correct) {
                 if (o.wordId === w.id) problems.push('오답이 같은 단어');
                 if (VQ.groupOf(o.pos) !== q.group) problems.push('품사 다름 ' + o.pos + '≠' + q.pos);
-                if (w.keys[VQ.normKey(o.text)]) problems.push('정답 단어의 뜻이 오답에: ' + o.text);
+                if (wKeys[VQ.normKey(o.text)]) problems.push('정답 단어의 뜻이 오답에: ' + o.text);
                 var ck = ix.byId[o.wordId].keys, hit = false;
-                for (var k in ck) if (w.keys[k]) { hit = true; break; }
+                for (var k in ck) if (wKeys[k]) { hit = true; break; }
                 if (hit) problems.push('뜻이 겹치는 오답: ' + o.text);
               }
             });
