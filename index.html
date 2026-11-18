@@ -233,6 +233,11 @@ button{font-family:inherit;font-size:1rem;cursor:pointer;border:none;background:
   .wrap{padding:28px 24px 60px}
   .wordcard{min-height:240px}
 }
+
+@media (min-width:760px) and (min-height:820px){
+  body{display:flex;align-items:center;min-height:100vh}
+  .wrap{width:100%}
+}
 </style>
 </head>
 <body>
@@ -1492,6 +1497,7 @@ const CORE = (function () {
 
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition || null;
   const S = {
+    activeRec: null,
     state: null,
     exam: null,
     idx: 0,
@@ -1612,6 +1618,7 @@ const CORE = (function () {
       rec.continuous = true;
       rec.maxAlternatives = 1;
 
+      S.activeRec = rec;
       let finalT = '';
       let interimT = '';
       let done = false;
@@ -1636,6 +1643,7 @@ const CORE = (function () {
         done = true;
         if (tick) clearInterval(tick);
         try { rec.stop(); } catch (e) {}
+        S.activeRec = null;
         setTimeout(() => {
           const tr = (finalT + ' ' + interimT).trim();
           el.heardEl.textContent = '';
@@ -1788,8 +1796,23 @@ const CORE = (function () {
     submitAnswer(res.transcript || '');
   }
 
+  /* ---------- 진행 취소 (직접 입력으로 전환할 때) ---------- */
+  function cancelFlow() {
+    S.token++;
+    try { window.speechSynthesis.cancel(); } catch (e) {}
+    if (S.activeRec) {
+      try { S.activeRec.abort(); } catch (e) {}
+      S.activeRec = null;
+    }
+    el.heardEl.textContent = '';
+  }
+
   /* ---------- 입력 패널 ---------- */
-  function openInput() {
+  function openInput(manual) {
+    if (manual) {
+      cancelFlow();
+      setStatus('idle', '✏️ 뜻을 입력하고 확인을 눌러 주세요');
+    }
     el.inputPanel.classList.remove('hidden');
     el.answerInput.value = '';
     setTimeout(() => el.answerInput.focus(), 60);
@@ -1915,7 +1938,7 @@ const CORE = (function () {
   });
 
   el.typeBtn.addEventListener('click', () => {
-    openInput();
+    openInput(true);
   });
 
   el.submitBtn.addEventListener('click', () => {
