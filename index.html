@@ -262,6 +262,8 @@ b{font-weight:800}
 }
 .voice-item.sel{background:var(--blue-soft);border:1.5px solid var(--blue);font-weight:800}
 .voice-item small{color:var(--muted);font-size:11.5px;font-weight:500}
+.voice-item>span{min-width:0}
+.voice-item>span:last-child{flex:0 0 auto;text-align:right;max-width:52%}
 .voice-now{background:var(--mint-soft);border-radius:16px;padding:12px 14px;margin-bottom:12px;display:flex;flex-direction:column;gap:3px}
 .voice-now-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .vn-label{font-size:11.5px;font-weight:800;color:#0b7a58;letter-spacing:.02em}
@@ -1542,7 +1544,7 @@ var VQ = (function () {
     var info = Speech.info();
     if (els.voiceNowName) els.voiceNowName.textContent = info.name || '기기 기본 목소리';
     if (els.voiceNowTune) {
-      var tone = info.kind === 'male' ? '부드러운 남성 톤'
+      var tone = info.kind === 'male' ? '부드럽게 조정'
         : info.kind === 'none' ? '기기 기본 톤'
           : '남성 톤으로 조정';
       els.voiceNowTune.textContent = kindKo(info.kind) + ' · ' + tone +
@@ -1567,8 +1569,8 @@ var VQ = (function () {
     var auto = document.createElement('button');
     auto.type = 'button';
     auto.className = 'voice-item' + (state.voiceName ? '' : ' sel');
-    auto.innerHTML = '<span>자동 <small>부드러운 남성 음성 우선</small></span><span>' +
-      (Speech.currentName() ? '지금: ' + Speech.currentName() : '') + '</span>';
+    auto.innerHTML = '<span>자동 <small>부드러운 남성 음성 우선</small></span><span><small>' +
+      (Speech.currentName() ? '지금: ' + Speech.currentName() : '') + '</small></span>';
     auto.onclick = function () {
       state.voiceName = ''; save(); Speech.setVoice('');
       renderVoiceSheet();
