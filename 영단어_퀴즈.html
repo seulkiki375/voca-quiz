@@ -561,30 +561,43 @@ var VQ = (function () {
 
     // 오답 후보: 같은 품사 묶음 + 다른 단어 + 뜻이 겹치지 않는 단어
     var pool = ix.pools[g] || [];
-    var seenKey = {}; seenKey[normKey(answerText)] = 1;
-    var fresh = [], stale = [], i, c;
-    for (i = 0; i < pool.length; i++) {
-      c = pool[i];
-      if (c.wordId === w.id) continue;
-      if (seenKey[c.key]) continue;
-      if (w.keys[c.key]) continue;                       // 정답 단어의 다른 뜻
-      var ck = ix.byId[c.wordId].keys, overlap = false;
-      for (var k in ck) { if (w.keys[k]) { overlap = true; break; } }
-      if (overlap) continue;                             // 뜻이 겹치는 유의어
-      if (opts.recent && opts.recent[c.key]) stale.push(c); else fresh.push(c);
+    var n = pool.length;
+    var pickedKey = {};
+    pickedKey[normKey(answerText)] = 1;
+    var picked = [];
+
+    function usable(c, allowStale) {
+      if (c.wordId === w.id) return false;
+      if (pickedKey[c.key]) return false;
+      if (w.keys[c.key]) return false;                   // 정답 단어의 다른 뜻
+      var ck = ix.byId[c.wordId].keys;
+      for (var k in ck) { if (w.keys[k]) return false; }  // 뜻이 겹치는 유의어
+      if (!allowStale && opts.recent && opts.recent[c.key]) return false;
+      return true;
     }
 
-    var picked = [], pickedKey = {};
-    function take(list) {
-      for (var j = 0; j < list.length && picked.length < 4; j++) {
-        var cc = list[j];
-        if (pickedKey[cc.key]) continue;
-        pickedKey[cc.key] = 1;
-        picked.push(cc);
+    // 무작위 탐색으로 4개를 고른다 (최근에 쓴 선지는 뒤쪽에서 허용)
+    var tries = 0, limit = Math.min(400, n * 3);
+    while (picked.length < 4 && tries < limit) {
+      tries++;
+      var cand = pool[Math.floor(rnd() * n) % n];
+      if (!cand) continue;
+      if (usable(cand, tries > limit / 2)) {
+        pickedKey[cand.key] = 1;
+        picked.push(cand);
       }
     }
-    take(shuffle(fresh, rnd));
-    if (picked.length < 4) take(shuffle(stale, rnd));
+    // 그래도 부족하면(아주 드문 경우) 전체를 한 번 훑는다
+    if (picked.length < 4) {
+      var order = shuffle(pool, rnd);
+      for (var ci = 0; ci < order.length && picked.length < 4; ci++) {
+        var c2 = order[ci];
+        if (!usable(c2, true)) continue;
+        pickedKey[c2.key] = 1;
+        picked.push(c2);
+      }
+    }
+    var i, c;
 
     if (picked.length < 4) {
       throw new Error('선지 부족: ' + w.word + ' (' + sense.pos + ') ' + picked.length + '/4');
@@ -996,7 +1009,7 @@ var VQ = (function () {
       }
       u1.onend = function () {
         if (my !== token) return;
-        setTimeout(second, FAST ? 60 : 320);
+        setTimeout(second, FAST ? 60 : 450);
       };
       u1.onerror = function () { if (my !== token) return; setTimeout(second, 60); };
       u2.onend = once;
@@ -1584,6 +1597,7 @@ var VQ_TEST = (function () {
       t = new T('전수 검사: 모든 단어 × 모든 뜻 → 동일 품사 5지선다');
       var checked = 0, fail = [], failCount = 0, posMix = {};
       for (var wi = 0; wi < VOCAB.length; wi++) {
+        if (wi % 200 === 199) { summaryEl.textContent = '실행 중… 전수 검사 ' + (wi + 1) + ' / 2000'; await wait(0); }
         var w = VOCAB[wi];
         for (var si = 0; si < w.senses.length; si++) {
           for (var seedI = 1; seedI <= 2; seedI++) {
