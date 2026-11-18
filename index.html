@@ -1543,6 +1543,7 @@ var VQ = (function () {
   function renderVoiceNow() {
     var info = Speech.info();
     if (els.voiceNowName) els.voiceNowName.textContent = info.name || '기기 기본 목소리';
+    if (els.voiceHomeName) els.voiceHomeName.textContent = info.name || '기기 기본 목소리';
     if (els.voiceNowTune) {
       var tone = info.kind === 'male' ? '부드럽게 조정'
         : info.kind === 'none' ? '기기 기본 톤'
