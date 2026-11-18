@@ -1157,7 +1157,7 @@ var VQ = (function () {
       var b = document.createElement('button');
       b.type = 'button';
       b.className = 'day' + (rec ? ' done' : '') + (!rec && !all && d === nd ? ' next' : '');
-      var pct = rec ? Math.round(rec.c / rec.t * 100) + '%' : '–';
+      var pct = rec ? Math.round(rec.c / rec.t * 100) + '%' : '';
       b.innerHTML = '<span class="n">' + d + '</span><span class="s">' + pct + '</span>';
       b.setAttribute('aria-label', 'DAY ' + d + (rec ? ' 완료 ' + pct : ''));
       (function (day) {
@@ -1263,16 +1263,22 @@ var VQ = (function () {
       Sound.wrong();
       showFx(false, q);
       var moved = false;
+      var startedAt = Date.now();
+      var MIN_SHOW = FAST ? 300 : 1700;     // 낭독이 일찍 끝나도 뜻을 읽을 시간은 준다
       var cap = FAST ? 900 : VQ.SPEECH_CAP_MS;
+      function finish(extra) {
+        if (moved) return;
+        moved = true;
+        clearTimeout(watchdog);
+        scheduleNext(extra);
+      }
       var watchdog = setTimeout(function () {
-        if (moved) return; moved = true;
         Speech.cancel();
-        scheduleNext(FAST ? 100 : 250);
+        finish(FAST ? 100 : 150);
       }, cap);
       Speech.speakWrong(q, function () {
-        if (moved) return; moved = true;
-        clearTimeout(watchdog);
-        scheduleNext(FAST ? 120 : 320);
+        var remain = Math.max(0, MIN_SHOW - (Date.now() - startedAt));
+        setTimeout(function () { finish(FAST ? 120 : 300); }, remain);
       });
     }
   }
