@@ -2075,7 +2075,8 @@ const CORE = (function () {
   el.replayBtn.addEventListener('click', async () => {
     const q = currentQuestion();
     if (!q || S.answered) return;
-    const token = S.token;
+    cancelFlow();            // 낭독·인식 중이면 먼저 멈춘다 (인식이 겹치지 않도록)
+    const token = S.token;   // cancelFlow가 토큰을 올린 뒤의 값으로 진행
     setStatus('listening', '🔊 다시 들려줄게요', true);
     try { window.speechSynthesis.cancel(); } catch (e) {}
     await speakOnce(q.word.word, 0.72);
