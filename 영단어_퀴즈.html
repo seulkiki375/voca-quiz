@@ -1716,7 +1716,22 @@ const CORE = (function () {
   function voiceLabel(v) {
     const g = voiceGender(v);
     const tag = g === 'male' ? '남성' : g === 'female' ? '여성' : '기본';
-    return String(v.name || v.lang) + ' · ' + tag + ' (' + normLang(v.lang) + ')';
+    return shortName(v) + ' · ' + tag + ' (' + normLang(v.lang) + ')';
+  }
+
+  /** 'Microsoft David - English (United States)' → 'David' 처럼 짧게 */
+  function shortName(v) {
+    let n = String((v && v.name) || (v && v.lang) || '');
+    n = n.replace(/\s*-\s*(Microsoft\s+)?English\s*\([^)]*\)\s*$/i, '');
+    n = n.replace(/^Microsoft\s+/i, '');
+    return n.trim() || String((v && v.lang) || 'voice');
+  }
+
+  /** 이름이 같은 음성이 여러 개면(안드로이드) voiceURI 끝코드로 구분한다 */
+  function shortCode(v) {
+    const parts = String((v && v.voiceURI) || '').split(/[-_.]/)
+      .filter((p) => p && !/^(local|network|com|apple|voice|compact)$/i.test(p));
+    return parts.length ? parts[parts.length - 1].slice(0, 6) : '';
   }
 
   /** 홈의 '목소리' 드롭다운 — 기기에 있는 영어 음성을 좋은 순서로 채운다 */
@@ -1734,13 +1749,16 @@ const CORE = (function () {
       : '자동 · 가장 또렷한 영어 음성';
     el.voiceSelect.appendChild(auto);
     const seen = {};
+    const nameCount = {};
+    ranked.forEach((v) => { const n = String(v.name || ''); nameCount[n] = (nameCount[n] || 0) + 1; });
     ranked.forEach((v) => {
       const id = voiceId(v);
       if (!id || seen[id]) return;
       seen[id] = true;
       const o = document.createElement('option');
       o.value = id;
-      o.textContent = voiceLabel(v);
+      const dup = nameCount[String(v.name || '')] > 1 && shortCode(v);
+      o.textContent = voiceLabel(v) + (dup ? ' · ' + shortCode(v) : '');
       el.voiceSelect.appendChild(o);
     });
     el.voiceSelect.value = (wanted && seen[wanted]) ? wanted : (keep && seen[keep] ? keep : '');
