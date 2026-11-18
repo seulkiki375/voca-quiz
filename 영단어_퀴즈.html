@@ -1524,6 +1524,7 @@ const CORE = (function () {
     answered: false,
     onResultScreen: false,
     voiceUsable: !!SR && 'speechSynthesis' in window,
+    cancelListen: null,
   };
 
   /* ---------- 화면 전환 ---------- */
@@ -1548,7 +1549,7 @@ const CORE = (function () {
   }
   function tone(freq, dur, delay = 0, type = 'sine', vol = 0.22) {
     const ctx = audio();
-    if (!ctx) return;
+    if (!ctx) return delay * 1000 + dur * 1000;
     const t0 = ctx.currentTime + delay;
     const osc = ctx.createOscillator();
     const g = ctx.createGain();
@@ -1560,9 +1561,11 @@ const CORE = (function () {
     osc.connect(g).connect(ctx.destination);
     osc.start(t0);
     osc.stop(t0 + dur + 0.02);
+    return (delay + dur + 0.02) * 1000;   // 이 소리가 완전히 끝나는 시각(ms)
   }
   const sound = {
-    beep() { tone(784, 0.12, 0); tone(1175, 0.16, 0.13); },
+    /** 비프음 길이(ms)를 돌려준다 — 소리가 끝나기 전에 마이크를 켜지 않기 위해 */
+    beep() { tone(784, 0.12, 0); return tone(1175, 0.16, 0.13); },
     correct() { tone(880, 0.1, 0); tone(1175, 0.1, 0.1); tone(1568, 0.18, 0.2); },
     wrong() { tone(311, 0.16, 0, 'triangle', 0.18); tone(233, 0.22, 0.15, 'triangle', 0.18); },
   };
@@ -1621,63 +1624,181 @@ const CORE = (function () {
     el.statusEl.appendChild(c);
     const t = document.createElement('span');
     t.id = 'statusText';
-    t.textContent = n > 0 ? '이제 뜻을 말해 보세요!' : '잘 들었어요';
+    t.textContent = n > 0 ? '이제 뜻을 말해 보세요!' : '듣기 끝!';
     el.statusEl.appendChild(t);
   }
 
   /* ---------- 음성 인식 ---------- */
+  /*  안드로이드 크롬은 말이 없으면 no-speech/aborted/빈 onend로 0.2초 만에 인식이 끝나 버린다.
+      그래서 3초 타이머가 0이 되기 전에는 절대 채점하지 않고, 끝나면 남은 시간 동안 조용히 다시 시작한다. */
+  const REC_BEEP_GAP_MS = 200;    // 비프음이 완전히 끝난 뒤 여유 (오디오 포커스 충돌 방지)
+  const REC_GRACE_MS = 700;       // 말이 끝난 뒤 발화를 마칠 수 있게 더 들어보는 시간
+  const REC_HARD_CAP_MS = 1200;   // 3초가 지나도 말하는 중이면 채점을 미뤄 주는 최대 시간
+
+  // 마이크 권한을 미리 물어 두어 첫 문제에서 권한 창 때문에 인식이 끊기는 일을 줄인다.
+  let micWarmed = false;
+  function warmUpMic() {
+    if (micWarmed) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+    micWarmed = true;
+    try {
+      navigator.mediaDevices.getUserMedia({ audio: true })
+        .then((stream) => { try { stream.getTracks().forEach((t) => t.stop()); } catch (e) {} })
+        .catch(() => { micWarmed = false; });
+    } catch (e) { micWarmed = false; }
+  }
+
   function listen(ms) {
     return new Promise((resolve) => {
-      if (!SR) return resolve({ supported: false, transcript: '' });
-      let rec;
-      try { rec = new SR(); } catch (e) { return resolve({ supported: false, transcript: '' }); }
-      rec.lang = 'ko-KR';
-      rec.interimResults = true;
-      rec.continuous = true;
-      rec.maxAlternatives = 1;
+      if (!SR) return resolve({ supported: false, denied: false, transcript: '' });
 
-      S.activeRec = rec;
+      const total = Math.max(1500, ms || 3000);
+      const deadline = Date.now() + total;        // 3초 카운트다운이 0이 되는 시각
+      const hardStop = deadline + REC_HARD_CAP_MS;
+
       let finalT = '';
       let interimT = '';
-      let done = false;
-      let remain = Math.max(1, Math.round(ms / 1000));
-      let tick = null;
+      let settled = false;
+      let rec = null;
+      let restarts = 0;
+      let lastLabel = null;
+      let answerTimer = null;
+      let displayTimer = null;
+      let deadlineTimer = null;
 
-      rec.onresult = (ev) => {
-        interimT = '';
-        for (let i = ev.resultIndex; i < ev.results.length; i++) {
-          const r = ev.results[i];
-          const txt = (r[0] && r[0].transcript) || '';
-          if (r.isFinal) finalT += ' ' + txt;
-          else interimT += ' ' + txt;
-        }
-        el.heardEl.innerHTML = '';
-        const b = document.createElement('b');
-        b.textContent = (finalT + ' ' + interimT).trim();
-        el.heardEl.appendChild(b);
-      };
-      const finish = () => {
-        if (done) return;
-        done = true;
-        if (tick) clearInterval(tick);
-        try { rec.stop(); } catch (e) {}
+      const transcript = () => (finalT + ' ' + interimT).replace(/\s+/g, ' ').trim();
+      const leftMs = () => deadline - Date.now();
+
+      function clearTimers() {
+        if (answerTimer) { clearTimeout(answerTimer); answerTimer = null; }
+        if (displayTimer) { clearInterval(displayTimer); displayTimer = null; }
+        if (deadlineTimer) { clearTimeout(deadlineTimer); deadlineTimer = null; }
+      }
+
+      function killRec() {
+        if (!rec) return;
+        const r = rec;
+        rec = null;
+        try { r.onstart = r.onresult = r.onerror = r.onend = null; } catch (e) {}
+        try { r.abort(); } catch (e) {}
+      }
+
+      function settle(denied) {
+        if (settled) return;
+        settled = true;
+        clearTimers();
+        killRec();
         S.activeRec = null;
-        setTimeout(() => {
-          const tr = (finalT + ' ' + interimT).trim();
+        S.cancelListen = null;
+        const tr = transcript();
+        if (denied) {
           el.heardEl.textContent = '';
-          resolve({ supported: true, transcript: tr });
-        }, 260);
-      };
-      rec.onerror = () => finish();
-      rec.onend = () => { /* 3초 타이머가 끝까지 기다린다 */ };
+          resolve({ supported: false, denied: true, transcript: tr });
+          return;
+        }
+        setTimeout(() => {
+          el.heardEl.textContent = '';
+          resolve({ supported: true, denied: false, transcript: tr });
+        }, 200);
+      }
 
-      try { rec.start(); } catch (e) { return resolve({ supported: false, transcript: '' }); }
-      setCountdown(remain);
-      tick = setInterval(() => {
-        remain--;
-        if (remain > 0) setCountdown(remain);
-        else finish();
-      }, 1000);
+      function cancel() {
+        if (settled) return;
+        settled = true;
+        clearTimers();
+        killRec();
+        S.activeRec = null;
+        S.cancelListen = null;
+        el.heardEl.textContent = '';
+        resolve({ supported: true, denied: false, canceled: true, transcript: '' });
+      }
+
+      // 3초가 다 지난 순간 — 이때만 '시간 초과'로 채점한다
+      function onTimeUp() {
+        if (settled) return;
+        if (answerTimer) return;   // 말하는 중이면 발화가 끝날 때까지(최대 REC_GRACE_MS) 기다린다
+        settle(false);
+      }
+
+      // 인식이 예정보다 일찍 끝났을 때: 시간이 남아 있으면 조용히 다시 시작
+      function scheduleRestart() {
+        if (settled) return;
+        if (leftMs() <= 0) { settle(false); return; }
+        if (restarts > 24) return;             // 안전장치: 그래도 deadlineTimer가 채점한다
+        restarts += 1;
+        const delay = Math.min(400, 120 + restarts * 30);
+        setTimeout(() => { if (!settled) startRec(); }, delay);
+      }
+
+      function startRec() {
+        if (settled || Date.now() >= hardStop) return;
+        killRec();
+        let r;
+        try { r = new SR(); } catch (e) { scheduleRestart(); return; }
+        rec = r;
+        r.lang = 'ko-KR';
+        r.interimResults = true;
+        r.continuous = true;
+        r.maxAlternatives = 1;
+
+        r.onresult = (ev) => {
+          if (rec !== r || settled) return;
+          interimT = '';
+          let gotFinal = false;
+          for (let i = ev.resultIndex || 0; i < ev.results.length; i++) {
+            const res = ev.results[i];
+            const txt = (res[0] && res[0].transcript) || '';
+            if (!txt.trim()) continue;
+            if (res.isFinal) { finalT += ' ' + txt; gotFinal = true; }
+            else interimT += ' ' + txt;
+          }
+          const tr = transcript();
+          el.heardEl.innerHTML = '';
+          if (tr) {
+            const b = document.createElement('b');
+            b.textContent = tr;
+            el.heardEl.appendChild(b);
+          }
+          if (!tr) return;
+
+          // 답이 들렸다: 말이 끝날 수 있게 짧게 더 들어보고 채점 (3초가 남아 있어도 조기 채점)
+          if (answerTimer) clearTimeout(answerTimer);
+          const wait = Math.max(0, Math.min(gotFinal ? 320 : REC_GRACE_MS, hardStop - Date.now()));
+          answerTimer = setTimeout(() => settle(false), wait);
+        };
+
+        r.onerror = (ev) => {
+          if (rec !== r || settled) return;
+          const err = (ev && ev.error) || '';
+          // 마이크 권한이 거부된 경우에만 즉시 안내 + 직접 입력 모드
+          if (err === 'not-allowed' || err === 'service-not-allowed') { settle(true); return; }
+          killRec();
+          scheduleRestart();   // no-speech · aborted · network · audio-capture → 남은 시간 동안 재시도
+        };
+
+        r.onend = () => {
+          if (rec !== r || settled) return;
+          killRec();
+          scheduleRestart();   // 0.2초 만에 끝나도 3초 타이머가 끝날 때까지 다시 듣는다
+        };
+
+        try { r.start(); } catch (e) { killRec(); scheduleRestart(); return; }
+        S.activeRec = r;
+      }
+
+      S.cancelListen = cancel;
+
+      // 화면 카운트다운 3 · 2 · 1 (실제 경과 시간 기준)
+      lastLabel = Math.ceil(total / 1000);
+      setCountdown(lastLabel);
+      displayTimer = setInterval(() => {
+        if (settled) return;
+        const left = Math.ceil(Math.max(0, leftMs()) / 1000);
+        if (left !== lastLabel) { lastLabel = left; setCountdown(left); }
+      }, 100);
+      deadlineTimer = setTimeout(onTimeUp, total);
+
+      startRec();
     });
   }
 
@@ -1737,6 +1858,7 @@ const CORE = (function () {
 
   /* ---------- 시험 시작 ---------- */
   function startDay(day) {
+    cancelFlow();
     S.state = CORE.loadState();
     const composed = CORE.composeExam(S.state, day);
     if (!composed.questions.length) return;
@@ -1744,7 +1866,8 @@ const CORE = (function () {
     S.idx = 0;
     S.results = [];
     S.answered = false;
-    audio(); // 사용자 조작 시점에 오디오 준비
+    audio();       // 사용자 조작 시점에 오디오 준비
+    warmUpMic();   // 마이크 권한을 미리 물어 둔다 (첫 문제 끊김 방지)
     show(el.quiz);
     runQuestion();
   }
@@ -1797,15 +1920,21 @@ const CORE = (function () {
     await speakOnce(w.word, 0.72);
     if (token !== S.token) return;
 
-    // 2) 비프음
+    // 2) 비프음 — 소리가 완전히 끝나고 200ms 뒤에 인식을 시작한다 (오디오 포커스 충돌 방지)
     setStatus('beep', '삐!');
-    sound.beep();
-    await sleep(230);
+    const beepMs = sound.beep();
+    await sleep(beepMs + REC_BEEP_GAP_MS);
     if (token !== S.token) return;
+    try { window.speechSynthesis.cancel(); } catch (e) {}
 
-    // 3) 3초간 듣기
+    // 3) 3초간 듣기 — 3초가 지나기 전에는 '시간 초과'로 끝내지 않는다
     const res = await listen(3000);
-    if (token !== S.token) return;
+    if (token !== S.token || res.canceled) return;
+    if (res.denied) {
+      setStatus('idle', '🎤 마이크 사용을 허락해야 음성으로 풀 수 있어요. 직접 입력으로 답해 주세요');
+      openInput();
+      return;
+    }
     if (!res.supported) {
       setStatus('idle', '🎤 마이크를 쓸 수 없어요. 직접 입력해 주세요');
       openInput();
@@ -1817,6 +1946,8 @@ const CORE = (function () {
   /* ---------- 진행 취소 (직접 입력으로 전환할 때) ---------- */
   function cancelFlow() {
     S.token++;
+    if (typeof S.cancelListen === 'function') { try { S.cancelListen(); } catch (e) {} }
+    S.cancelListen = null;
     try { window.speechSynthesis.cancel(); } catch (e) {}
     if (S.activeRec) {
       try { S.activeRec.abort(); } catch (e) {}
@@ -1949,9 +2080,20 @@ const CORE = (function () {
     try { window.speechSynthesis.cancel(); } catch (e) {}
     await speakOnce(q.word.word, 0.72);
     if (token !== S.token) return;
-    setCountdown(3);
-    const res = await listen(3000);
+    await sleep(REC_BEEP_GAP_MS + 120);
     if (token !== S.token) return;
+    try { window.speechSynthesis.cancel(); } catch (e) {}
+    setStatus('beep', '삐!');
+    const beepMs = sound.beep();
+    await sleep(beepMs + REC_BEEP_GAP_MS);
+    if (token !== S.token) return;
+    const res = await listen(3000);
+    if (token !== S.token || res.canceled) return;
+    if (res.denied || !res.supported) {
+      setStatus('idle', '🎤 마이크를 쓸 수 없어요. 직접 입력해 주세요');
+      openInput();
+      return;
+    }
     submitAnswer(res.transcript || '');
   });
 
@@ -1974,15 +2116,14 @@ const CORE = (function () {
 
   el.quitBtn.addEventListener('click', () => {
     if (!confirm('그만 풀고 홈으로 돌아갈까요? 지금까지 푼 문제는 기록되지 않아요.')) return;
-    S.token++;
-    try { window.speechSynthesis.cancel(); } catch (e) {}
+    cancelFlow();
     hideFeedback();
     renderHome();
     show(el.home);
   });
 
   el.homeBtn.addEventListener('click', () => {
-    S.token++;
+    cancelFlow();
     renderHome();
     show(el.home);
   });
