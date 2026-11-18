@@ -1968,7 +1968,7 @@ const CORE = (function () {
     }
   }
 
-  window.APP = { S, startDay, show, renderHome, submitAnswer, el };
+  window.APP = { S, startDay, show, renderHome, submitAnswer, el, finishExam, nextQuestion, runQuestion };
   boot();
 })();
 </script>
@@ -2067,7 +2067,8 @@ function RUN_TESTS() {
 
   /* ---------- 5. 말투/잡음 정규화 ---------- */
   check('정규화: "손실이요" → 정답', () => CORE.grade(byId[16], '손실이요').ok === true);
-  check('정규화: "음 강제" 앞 군더더기 제거', () => CORE.grade(fakeEntry('v', ['강요하다']), '음 강제').ok === true);
+  check('정규화: "음 강제" 앞 군더더기 제거', () => CORE.grade(fakeEntry('n', ['강요']), '음 강제').ok === true);
+  check('정규화: "어... 강제하다" 군더더기 + 동사형', () => CORE.grade(fakeEntry('v', ['강요하다']), '어... 강제하다').ok === true);
   check('정규화: "강제 합니다" 띄어쓰기/존댓말', () => CORE.grade(fakeEntry('v', ['강요하다']), '강제 합니다').ok === true);
   check('정규화: "강제하다." 마침표', () => CORE.grade(fakeEntry('v', ['강요하다']), '강제하다.').ok === true);
   check('정규화: 빈 답은 시간 초과 처리', () => CORE.grade(byId[1], '   ').reason === 'none');
