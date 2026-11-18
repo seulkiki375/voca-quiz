@@ -1509,7 +1509,7 @@ const CORE = (function () {
   let speakTimer = null;
   const synth = {
     speaking: false, paused: false, pending: false, onvoiceschanged: null,
-    getVoices() { return [{ name: 'Mock English', lang: 'en-US', default: true }]; },
+    getVoices() { return []; },   // 진짜 SpeechSynthesisVoice 가 아니면 u.voice 대입에서 예외가 난다
     cancel() { if (speakTimer) { clearTimeout(speakTimer); speakTimer = null; } note('synth.cancel'); },
     pause() {}, resume() {},
     speak(u) {
